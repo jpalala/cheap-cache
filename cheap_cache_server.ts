@@ -1,0 +1,191 @@
+// Deno native TCP cache server with TTL
+// To run: deno run --allow-net --allow-write cheap_cache.ts
+
+/**
+ * A simple, in-memory TCP cache server.
+ * It provides basic Redis-like GET and SET commands with TTL.
+ *
+ * To run: `deno run --allow-net --allow-write cheap_cache.ts`
+ */
+
+// The cache data structure.
+const cache = new Map<string, { value: string; expireAt: number }>();
+
+// Maximum TTL for keys (30 days in milliseconds).
+const MAX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Helper to get current time in milliseconds.
+const now = () => Date.now();
+
+// --- Cache Operations ---
+
+/**
+ * Sets a key with a TTL in the cache.
+ * @param key The key.
+ * @param value The value.
+ * @param ttl_seconds The time to live in seconds.
+ */
+function setCache(key: string, value: string, ttl_seconds: number) {
+  // Cap the TTL
+  let ttl = ttl_seconds <= 0 || ttl_seconds > MAX_TTL_MS / 1000
+    ? MAX_TTL_MS
+    : ttl_seconds * 1000;
+
+  const expireAt = now() + ttl;
+  cache.set(key, { value, expireAt });
+}
+
+/**
+ * Retrieves a value by key. Cleans up expired keys on access.
+ * @param key The key to retrieve.
+ * @returns The value or null if not found or expired.
+ */
+function getCache(key: string): string | null {
+  const entry = cache.get(key);
+  if (!entry) {
+    return null;
+  }
+
+  // Check for expiration
+  if (entry.expireAt <= now()) {
+    cache.delete(key);
+    return null;
+  }
+
+  return entry.value;
+}
+
+/**
+ * Dumps the current non-expired cache to a JSON file.
+ * @param filename The name of the file to write to.
+ */
+async function dumpCache(filename: string): Promise<void> {
+  const data: Record<string, { value: string; ttl: number }> = {};
+  const currentTime = now();
+
+  for (const [key, entry] of cache.entries()) {
+    if (entry.expireAt > currentTime) {
+      data[key] = {
+        value: entry.value,
+        ttl: Math.round((entry.expireAt - currentTime) / 1000),
+      };
+    } else {
+      cache.delete(key); // Clean up expired keys during dump
+    }
+  }
+
+  await Deno.writeTextFile(filename, JSON.stringify(data, null, 2));
+}
+
+// --- Background Cleanup ---
+
+// Asynchronously clean up expired entries.
+async function startCleanupLoop() {
+  const CLEANUP_INTERVAL_MS = 1000;
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, CLEANUP_INTERVAL_MS));
+    const currentTime = now();
+    for (const [key, entry] of cache.entries()) {
+      if (entry.expireAt <= currentTime) {
+        cache.delete(key);
+      }
+    }
+  }
+}
+
+// Start the cleanup loop.
+startCleanupLoop();
+
+// --- Network & Command Handling ---
+
+// RESP-like helpers for Deno.
+function sendOK(conn: Deno.Conn) {
+  conn.write(new TextEncoder().encode("+OK\r\n"));
+}
+
+function sendErr(conn: Deno.Conn, msg: string) {
+  conn.write(new TextEncoder().encode(`-ERR ${msg}\r\n`));
+}
+
+function sendBulkString(conn: Deno.Conn, s: string | null) {
+  if (!s) {
+    conn.write(new TextEncoder().encode("$-1\r\n"));
+    return;
+  }
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(s);
+  const header = `$${bytes.length}\r\n`;
+  conn.write(encoder.encode(header));
+  conn.write(bytes);
+  conn.write(encoder.encode("\r\n"));
+}
+
+/**
+ * Handles incoming TCP connections.
+ */
+async function handleConnection(conn: Deno.Conn) {
+  try {
+    const buffer = new Uint8Array(2048);
+    const n = await conn.read(buffer);
+    if (!n) {
+      return;
+    }
+
+    const command = new TextDecoder().decode(buffer.subarray(0, n)).trim();
+    const parts = command.split(/\s+/);
+    const cmd = parts[0].toUpperCase();
+
+    switch (cmd) {
+      case "SET":
+        if (parts.length === 4) {
+          const [_, key, value, ttlStr] = parts;
+          const ttl = parseInt(ttlStr);
+          if (isNaN(ttl)) {
+            sendErr(conn, "invalid TTL");
+          } else {
+            setCache(key, value, ttl);
+            sendOK(conn);
+          }
+        } else {
+          sendErr(conn, "SET requires key, value, and ttl");
+        }
+        break;
+
+      case "GET":
+        if (parts.length === 2) {
+          const [_, key] = parts;
+          const value = getCache(key);
+          sendBulkString(conn, value);
+        } else {
+          sendErr(conn, "GET requires a key");
+        }
+        break;
+
+      case "DUMP":
+        const filename = parts[1] || "cheap_cache_dump.json";
+        await dumpCache(filename);
+        sendOK(conn);
+        break;
+
+      default:
+        sendErr(conn, "unknown command");
+        break;
+    }
+  } catch (error) {
+    console.error("Error handling connection:", error);
+    sendErr(conn, `internal server error`);
+  } finally {
+    conn.close();
+  }
+}
+
+// --- Main Server Setup ---
+const PORT = 6379;
+
+console.log(`Deno cache server listening on port ${PORT}`);
+const server = Deno.listen({ port: PORT, transport: "tcp" });
+
+// Accept incoming connections and handle them concurrently.
+for await (const conn of server) {
+  handleConnection(conn);
+}
