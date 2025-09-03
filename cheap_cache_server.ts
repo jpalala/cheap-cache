@@ -1,5 +1,8 @@
 // Deno native TCP cache server with TTL
 // To run: deno run --allow-net --allow-write cheap_cache.ts
+
+
+import { Deno } from "https://deno.land/x/deno@v1.27.1/mod.ts";
 import { LruCache } from "jsr:@std/cache/lru-cache";
 
 /**
