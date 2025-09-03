@@ -1,0 +1,11 @@
+{
+  "name": "@jpalala/cheap-cache",
+  "version": "1.0.0",
+  "exports": {
+    ".": "./cheap_cache_server.ts"
+  },
+  "imports": {
+    "jsr:@std/cache/lru-cache": "jsr:@std/cache/lru-cache@^1.0.0"
+  },
+  "lock": false
+}
