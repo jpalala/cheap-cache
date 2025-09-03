@@ -3,7 +3,8 @@
 
 
 import { Deno } from "https://deno.land/x/deno@v1.27.1/mod.ts";
-import { LruCache } from "jsr:@std/cache/lru-cache";
+// import { LruCache } from "jsr:@std/cache/lru-cache";
+import { LruCache } from "jsr:@std/cache@0.2.0/lru-cache";
 
 /**
  * A simple, in-memory TCP cache server.
