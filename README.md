@@ -21,7 +21,7 @@ A simple, in-memory TCP cache server written in TypeScript for Deno. It provides
 3. Run the server with the following command. The `--allow-net` and `--allow-write` flags are necessary to allow the server to listen on a port and write the dump file.
 
 ```
-deno run --allow-net --allow-write cheap_cache.ts
+deno run --allow-net --allow-write cheap_cache_server.ts
 ```
 
 The server will start and listen on port `6379`.
