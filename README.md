@@ -69,6 +69,16 @@ $-1
 +OK
 ```
 
-The `my_backup.json` file would contain the current state of the cache.
+You can use the PHP script I included to see how it would be used in a PHP client. PHP is not dead.
 
-Let me know if you want this saved as a `.md` file.
+## Quick Note
+
+This project is a **learning playground** built in Deno. Its purpose is **not to be a full Redis replacement**, but rather to explore and experiment with:
+
+- **TCP networking in Deno** using `Deno.Conn` and async loops.  
+- **Simple caching** with key/value pairs and TTLs.  
+- **LRU eviction** for both cache entries and client connections.  
+- **Persistent connections** for clients (tested via PHP scripts).  
+
+The PHP client and other utilities are meant to **demonstrate usage and test behaviors**, not for production use.  
+This project is primarily educational — it shows how connections, caching, and evictions can work together in a small Redis-like system.
