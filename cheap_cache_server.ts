@@ -15,7 +15,21 @@ import { LruCache } from "jsr:@std/cache@0.2.0/lru-cache";
 // The cache data structure using the Deno standard library.
 // It manages the LRU logic internally. The size is based on the number of items.
 let maxCacheItems = 10000; // Default limit: 10,000 items
+const MAX_CONNECTIONS = 1000; // LIMIT 1000 clients at a time (dont worry, handled by the LRU cache!)
+const PORT = 6379;
+
 const cache = new LruCache<string, { value: string; expireAt: number }>(maxCacheItems);
+
+// --- NEW: LRU cache to track active connections ---
+const connCache = new LruCache<number, Deno.Conn>(MAX_CONNECTIONS, {
+  onEviction: (_, conn) => {          // NEW: callback when evicted
+    try {
+      conn.close();                   // NEW: close evicted connection
+    } catch (_) {}
+  },
+});
+
+let nextConnId = 1; // NEW: unique ID for each connection
 
 // Maximum TTL for keys (30 days in milliseconds).
 const MAX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -114,6 +128,11 @@ function sendOK(conn: Deno.Conn) {
     conn.write(new TextEncoder().encode("+OK\r\n"));
 }
 
+async function send(conn: Deno.Conn, message: string) {
+  // Remove $<len> formatting
+  await conn.write(new TextEncoder().encode(message + "\r\n"));
+}
+
 function sendErr(conn: Deno.Conn, msg: string) {
     conn.write(new TextEncoder().encode(`-ERR ${msg}\r\n`));
 }
@@ -134,86 +153,89 @@ function sendBulkString(conn: Deno.Conn, s: string | null) {
 /**
  * Handles incoming TCP connections.
  */
-async function handleConnection(conn: Deno.Conn) {
-    try {
-        const buffer = new Uint8Array(2048);
-        const n = await conn.read(buffer);
-        if (!n) {
-            return;
+async function handleConnection(conn: Deno.Conn, id: number) {
+  try {
+    const buffer = new Uint8Array(2048);
+
+    while (true) { // keep connection alive
+      const n = await conn.read(buffer);
+      if (!n) break; // client closed connection
+
+      const command = new TextDecoder().decode(buffer.subarray(0, n)).trim();
+      const parts = command.split(/\s+/);
+      const cmd = parts[0].toUpperCase();
+
+      switch (cmd) {
+        case "SET": {
+          if (parts.length === 4) {
+            const [_, key, value, ttlStr] = parts;
+            const ttl = parseInt(ttlStr);
+            if (isNaN(ttl)) {
+              sendErr(conn, "invalid TTL");
+            } else {
+              setCache(key, value, ttl);
+              sendOK(conn);
+            }
+          } else {
+            sendErr(conn, "SET requires key, value, and ttl");
+          }
+          break;
         }
 
-        const command = new TextDecoder().decode(buffer.subarray(0, n)).trim();
-        const parts = command.split(/\s+/);
-        const cmd = parts[0].toUpperCase();
-
-        switch (cmd) {
-            case "SET":
-                if (parts.length === 4) {
-                    const [_, key, value, ttlStr] = parts;
-                    const ttl = parseInt(ttlStr);
-                    if (isNaN(ttl)) {
-                        sendErr(conn, "invalid TTL");
-                    } else {
-                        setCache(key, value, ttl);
-                        sendOK(conn);
-                    }
-                } else {
-                    sendErr(conn, "SET requires key, value, and ttl");
-                }
-                break;
-
-            case "GET":
-                if (parts.length === 2) {
-                    const [_, key] = parts;
-                    const value = getCache(key);
-                    sendBulkString(conn, value);
-                } else {
-                    sendErr(conn, "GET requires a key");
-                }
-                break;
-
-            case "DUMP":
-                const filename = parts[1] || "cheap_cache_dump.json";
-                await dumpCache(filename);
-                sendOK(conn);
-                break;
-
-            case "LIMIT":
-                if (parts.length === 2) {
-                    const [_, sizeItemsStr] = parts;
-                    const sizeItems = parseInt(sizeItemsStr);
-                    if (isNaN(sizeItems) || sizeItems <= 0) {
-                        sendErr(conn, "invalid size (must be a positive integer)");
-                    } else {
-                        maxCacheItems = sizeItems;
-                        cache.resize(maxCacheItems); // Use the built-in resize method
-                        sendOK(conn);
-                        console.log(`Cache size limit set to ${sizeItems} items`);
-                    }
-                } else {
-                    sendErr(conn, "LIMIT requires size in number of items");
-                }
-                break;
-
-            default:
-                sendErr(conn, "unknown command");
-                break;
+        case "GET": {
+          if (parts.length === 2) {
+            const [_, key] = parts;
+            const value = getCache(key);
+            sendBulkString(conn, value);
+          } else {
+            sendErr(conn, "GET requires a key");
+          }
+          break;
         }
-    } catch (error) {
-        console.error("Error handling connection:", error);
-        sendErr(conn, `internal server error`);
-    } finally {
-        conn.close();
+
+        case "DUMP": {
+          const filename = parts[1] || "cheap_cache_dump.json";
+          await dumpCache(filename);
+          sendOK(conn);
+          break;
+        }
+
+        case "LIMIT": {
+          if (parts.length === 2) {
+            const [_, sizeItemsStr] = parts;
+            const sizeItems = parseInt(sizeItemsStr);
+            if (isNaN(sizeItems) || sizeItems <= 0) {
+              sendErr(conn, "invalid size (must be a positive integer)");
+            } else {
+              maxCacheItems = sizeItems;
+              cache.resize(maxCacheItems);
+              sendOK(conn);
+              console.log(`Cache size limit set to ${sizeItems} items`);
+            }
+          } else {
+            sendErr(conn, "LIMIT requires size in number of items");
+          }
+          break;
+        }
+
+        default:
+          sendErr(conn, "unknown command");
+      }
     }
+  } catch (error) {
+    console.error("Error handling connection:", error);
+  } finally {
+    connCache.delete(id);
+    conn.close(); // only when client closes or error occurs
+  }
 }
 
-// --- Main Server Setup ---
-const PORT = 6379;
-
-console.log(`Deno cache server listening on port ${PORT}`);
+// --- Main server ---
+console.log(`CheapCache server listening on port ${PORT}`);
 const server = Deno.listen({ port: PORT, transport: "tcp" });
 
-// Accept incoming connections and handle them concurrently.
 for await (const conn of server) {
-    handleConnection(conn);
+  const id = nextConnId++;
+  connCache.set(id, conn); // automatically evict oldest if full
+  handleConnection(conn, id);
 }
