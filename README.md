@@ -82,3 +82,15 @@ This project is a **learning playground** built in Deno. Its purpose is **not to
 
 The PHP client and other utilities are meant to **demonstrate usage and test behaviors**, not for production use.  
 This project is primarily educational — it shows how connections, caching, and evictions can work together in a small Redis-like system.
+
+## Recommended Uses
+
+This cheapcache server is a lightweight, in-memory key-value store with TTL and LRU eviction. It is best suited for ephemeral, _non-sensitive_ data:
+
+- ✅ **Content / UI caching**: Cache HTML fragments, JSON responses, or rendered templates to speed up page loads.
+
+- ✅ **Session metadata****: Store user preferences, temporary selections, or other _non-sensitive_ session info.
+
+- ✅ **Computed values / aggregate**: Cache precomputed totals, counts, or analytics to avoid repeated expensive calculations.
+
+> ⚠️ Avoid storing secrets, passwords, JWT tokens, or large binary data. This cache is volatile and primarily meant for temporary, fast-access data.
