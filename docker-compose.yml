@@ -1,0 +1,24 @@
+version: "3.9"
+services:
+  cheapcache:
+    build: .
+    container_name: cheapcache
+    networks:
+      - cache_net
+    ports:
+      - "6379:6379"  # optional; only if you want external access
+    restart: unless-stopped
+
+  # myapp:
+  #   image: php:8.2-cli
+  #   container_name: myapp
+  #   networks:
+  #     - cache_net # this myapp is your app or what will connect to the cheapcache
+  #   volumes:
+  #     - ./myapp:/app
+  #   working_dir: /app
+  #   command: php script.php
+
+networks:
+  cache_net:
+    driver: bridge
